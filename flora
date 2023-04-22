@@ -1,0 +1,648 @@
+#!/bin/bash
+
+cat << "EOF"
+___________.__                       
+\_   _____/|  |   ________________   
+ |    __)  |  |  /  _ \_  __ \__  \  
+ |     \   |  |_(  <_> )  | \// __ \_
+ \___  /   |____/\____/|__|  (____  /
+     \/                           \/ 
+          
+        Discover and takeover subdomains
+            Version 1.0 by Chokri Hammedi
+            
+EOF
+
+DNS_RECORD_TYPES=('A' 'AAAA' 'CNAME' 'MX' 'NS' 'PTR' 'SOA' 'SRV' 'TXT')
+
+
+HTTP_STATUS_CODES=(403 404 405 429 500 503 504)
+
+
+BUCKET_NAMES=('s3' 's3.amazonaws' 's3-us-west-1' 's3-us-west-2' 's3-eu-west-1' 's3-ap-northeast-1' 's3-ap-southeast-1' 's3-ap-southeast-2' 's3-us-gov-west-1' 's3-fips-us-gov-west-1')
+
+
+SUBDOMAIN_LIST=("www" "mail" "webmail" "blog" "dev" "test" "admin" "shop" "forum" "m" "api" "secure" "vpn" "support" "mobile" "docs" "demo" "portal" "store" "web" "wiki" "remote" "ftp" "smtp" "owa" "cloud" "app" "apps" "beta" "git" "ns1" "ns2" "staging" "backup" "mx" "video" "mail1" "mail2" "cdn" "ssl" "help" "members" "upload" "downloads" "sandbox" "static" "status" "cp" "control" "cpanel" "images" "img" "file" "db" "database" "portal" "online" "network" "tools" "assets" "media" "webapp" "exchange" "jobs" "client" "dashboard" "archive" "chat" "contacts" "directory" "education" "events" "files" "gallery" "graphics" "mail3" "mail4" "news" "newsletter" "partners" "public" "register" "reports" "research" "resources" "server" "sitemap" "sites" "social" "software" "staff" "storage" "templates" "themes" "track" "tracking" "training" "updates" "video" "videos" "webhosting" "webstats" "whm" "www1" "www2" "www3")
+
+
+
+MODE="discovery"
+VERBOSE=false
+USE_SHODAN=false
+USE_VIRUSTOTAL=false
+USE_ASSETFINDER=false
+USE_SECURITYTRAILS=false
+USE_FINGERPRINT=false
+THREADS=50
+SECURITYTRAILS_API_KEY=""
+SHODAN_API_KEY=""
+VIRUSTOTAL_API_KEY=""
+WORDLIST=""
+
+function usage() {
+  echo "Usage: $0 -d <domain> [-m <mode>] [-w <wordlist>] [-v] [-s <shodan_api_key>] [-k <virustotal_api_key>] [-o <output_file>] [-X <securitytrails_api_key>] [-o] [-a] [-f] "
+  echo
+  echo "Options:"
+  echo "  -d: domain to scan"
+  echo "  -m: mode (discovery or takeover, default: discovery)"
+  echo "  -w: wordlist file for subdomain brute force (optional)"
+  echo "  -v: verbose mode"
+  echo "  -t: number of threads to use for subdomain brute force (default: 50)"
+  echo "  -s: Shodan API key (optional, use Shodan for subdomain enumeration)"
+  echo "  -k: VirusTotal API key (optional, use VirusTotal for subdomain enumeration)"
+  echo "  -o: output file path (optional, will output to console if not specified)"
+  echo "  -f: use fingerprinting to identify subdomains (default: false)"
+  echo "  -a: use Assetfinder for subdomain enumeration"
+  echo "  -X: SecurityTrails API key  (optional, use SecurityTrails for subdomain enumeration)"
+
+
+  exit 1
+}
+
+while getopts ":d:m:w:k:t:s:o:fX:aCv" opt; do
+  case ${opt} in
+    d )
+      DOMAIN="$OPTARG"
+      ;;
+    m )
+      MODE="$OPTARG"
+      ;;
+    w )
+      WORDLIST="$OPTARG"
+      ;;
+    v )
+      VERBOSE=true
+      ;;
+    t )
+      THREADS="$OPTARG"
+      ;;
+    f)
+      USE_FINGERPRINT=true
+      ;;
+    s )
+      if [[ -z "$OPTARG" ]]; then
+        echo "Error: Shodan API key is required when using the -s flag." >&2
+        usage
+      fi
+      SHODAN_API_KEY="$OPTARG"
+      USE_SHODAN=true
+      ;;
+    X )
+      if [[ -z "$OPTARG" ]]; then
+        echo "Error: SecurityTrails API key is required when using the -X flag." >&2
+        usage
+      else
+        SECURITYTRAILS_API_KEY="$OPTARG"
+        USE_SECURITYTRAILS=true
+      fi
+      ;;
+    a )
+      USE_ASSETFINDER=true
+      ;;
+    k )
+      if [[ -z "$OPTARG" ]]; then
+        echo "Error: VirusTotal API key is required when using the -k flag." >&2
+        usage
+      fi
+      VIRUSTOTAL_API_KEY="$OPTARG"
+      USE_VIRUSTOTAL=true
+      ;;
+    o )
+      OUTPUT="$OPTARG"
+      ;;
+    \? )
+      echo "Invalid option: $OPTARG" >&2
+      usage
+      ;;
+    : )
+      echo "Invalid option: $OPTARG requires an argument" >&2
+      usage
+      ;;
+  esac
+done
+
+
+
+
+
+if [[ -z "$DOMAIN" ]]; then
+  echo "Error: domain argument (-d) is required." >&2
+  usage
+fi
+
+echo ""
+echo "Domain: $DOMAIN"
+echo "Mode: $MODE"
+if [[ -z "$WORDLIST" ]]; then
+  echo "Wordlist: None"
+else
+  echo "Wordlist: $WORDLIST"
+fi
+
+echo "Verbose: $VERBOSE"
+echo "Threads: $THREADS"
+
+
+if [[ "$USE_SHODAN" = true ]]; then
+  echo "Using Shodan API key: $SHODAN_API_KEY"
+fi
+
+if [[ "$USE_VIRUSTOTAL" = true ]]; then
+echo -e "VirusTotal API key: $VIRUSTOTAL_API_KEY\nUse VirusTotal: $USE_VIRUSTOTAL"
+fi
+
+
+if [[ "$USE_SECURITYTRAILS" = true ]]; then
+echo -e "Securitytrails API key: $SECURITYTRAILS_API_KEY\nUse Securitytrails: $USE_SECURITYTRAILS"
+fi
+
+
+
+if [[ "$USE_FINGERPRINT" = true ]]; then
+echo -e "Use Fingerprint: $USE_FINGERPRINT"
+fi
+
+if [[ "$USE_ASSETFINDER" = true ]]; then
+echo -e "Use Assetfinder: $USE_ASSETFINDER"
+fi
+
+
+
+
+discover_subdomains() {
+	echo ""
+    echo "[*] Discovering subdomains for domain $DOMAIN"
+    discovered_subdomains=()
+    
+    
+         
+    # SecurityTrails 
+    if [ "$USE_SECURITYTRAILS" = true ]; then
+        echo "[*] SecurityTrails subdomain enumeration"
+        response=$(curl -s "https://api.securitytrails.com/v1/domain/$DOMAIN/subdomains" -H "APIKEY: $SECURITYTRAILS_API_KEY")
+        
+        if ! echo "$response" | jq . >/dev/null 2>&1; then
+            echo "Error: Invalid JSON response received from SecurityTrails API."
+            exit 1
+        fi
+        if [ $(echo "$response" | jq '.subdomains | length') -gt 0 ]; then
+            echo "Found subdomains:"
+            for subdomain in $(echo "$response" | jq -r '.subdomains[]' | sort -u); do
+                full_subdomain="${subdomain}.${DOMAIN}"
+                echo -e "   + \e[32m$full_subdomain\e[0m"  
+                discovered_subdomains+=("$full_subdomain")
+            done
+        fi
+    fi
+
+
+    # Bruteforce 
+    
+    if [[ -n "$WORDLIST" ]]; then
+        if [[ ! -f "$WORDLIST" ]]; then
+            echo "[ERROR] Wordlist file not found: $WORDLIST"
+            exit 1
+        fi
+        echo "[*] Using wordlist: $WORDLIST"
+        mapfile -t SUBDOMAIN_LIST < "$WORDLIST"
+    fi
+	
+	# shodan enum
+	if [ "$USE_SHODAN" = true ]; then
+        echo "[*] Shodan subdomain enumeration"
+        for subdomain in $(curl -s "https://api.shodan.io/shodan/host/search?key=${SHODAN_API_KEY}&query=${DOMAIN}" | jq -r '.matches[].hostnames[]' | sort -u); do
+            discovered_subdomains+=("$subdomain")
+        done
+        
+        echo "[*] Discovered subdomains from Shodan:"
+        for subdomain in "${discovered_subdomains[@]}"; do
+            echo -e "   + \e[32m$subdomain\e[0m"
+        done
+    fi
+
+    # virustotal
+    
+    if [ "$USE_VIRUSTOTAL" = true ]; then
+      echo "[*] VirusTotal subdomain enumeration"
+      
+      
+      command -v jq >/dev/null 2>&1 || { echo "Error: jq is not installed. Please install it to use this functionality."; exit 1; }
+      command -v curl >/dev/null 2>&1 || { echo "Error: curl is not installed. Please install it to use this functionality."; exit 1; }
+      
+      
+      if [ -z "$VIRUSTOTAL_API_KEY" ]; then
+        echo "Error: VIRUSTOTAL_API_KEY is not set. Please set the API key to use this functionality."
+        exit 1
+      fi
+      
+      
+      response=$(curl -s -H "x-apikey: ${VIRUSTOTAL_API_KEY}" "https://www.virustotal.com/api/v3/domains/${DOMAIN}/subdomains")
+
+      
+      if ! echo "$response" | jq . >/dev/null 2>&1; then
+        echo "Error: Invalid JSON response received from VirusTotal API."
+        exit 1
+      fi
+
+      
+      for subdomain in $(echo "$response" | jq -r '.data[].id' | sort -u); do
+        discovered_subdomains+=("$subdomain")
+      done
+
+      
+      echo "Discovered subdomains from Virustotal:"
+      for subdomain in "${discovered_subdomains[@]}"; do
+        echo "  - $subdomain"
+      done
+    
+    fi
+
+	#assetfinder
+	
+	if [ "$USE_ASSETFINDER" = true ]; then
+    echo "[*] Assetfinder subdomain enumeration"
+    for subdomain in $(assetfinder --subs-only $DOMAIN); do
+        discovered_subdomains+=("$subdomain")
+    done
+        fi
+
+    # VHOST 
+    echo "${SUBDOMAIN_LIST[@]}" | tr " " "\n" | parallel -j "$THREADS" --timeout 5 "curl -s -o /dev/null -w \"%{http_code}\" -H \"Host: {}.${DOMAIN}\" \"$DOMAIN\" | grep -q '^302' && discovered_subdomains+=(\"{}.${DOMAIN}\") && echo -e \"[*] Discovered  \e[32m{}.${DOMAIN}\e[0m with HTTP status code 302\""
+	
+	 # list dns enum
+    echo ""
+    echo "[*] Running DNS subdomain enumeration"
+    for subdomain in "${SUBDOMAIN_LIST[@]}"; do
+        domain="$subdomain.$DOMAIN"
+        if host "$domain" &> /dev/null; then
+            discovered_subdomains+=("$domain")
+            echo "[+] Discovered subdomain: $domain"
+        fi
+    done
+    
+    # Wayback Machine enum
+        if [ "$USE_WAYBACK" = true ]; then
+            echo "[*] Wayback Machine subdomain enumeration"
+            for subdomain in $(curl -s "http://web.archive.org/cdx/search/cdx?url=*.$DOMAIN/*&output=text&fl=original&collapse=urlkey" | grep -o '[^ ]*\.${DOMAIN}' | sort -u); do
+                discovered_subdomains+=("$subdomain")
+            done
+        fi
+
+
+    # online enum 
+	echo ""
+	echo "[*] Online subdomain enumeration"
+	echo ""
+
+	DOMAIN_ESC=$(echo "$DOMAIN" | sed 's/\./\\\\./g')
+	ONLINE_SUBDOMAINS=$(curl -s "https://crt.sh/?q=%25.$DOMAIN_ESC&output=json" | jq -r '.[].name_value' | sed 's/\*\.//g' | sort -u; curl -s "https://api.certspotter.com/v1/issuances?domain=$DOMAIN&include_subdomains=true&expand=dns_names" | jq -r '.[].dns_names[]' | sed 's/\*\.//g' | sort -u; curl -s "https://api.hackertarget.com/hostsearch/?q=$DOMAIN" | grep -oE "[a-zA-Z0-9._-]+\.$DOMAIN" | sort -u)
+
+	while read -r subdomain; do
+        discovered_subdomains+=("$subdomain")
+        
+    done <<< "$ONLINE_SUBDOMAINS"
+
+   
+    echo ""
+
+    echo "[*] Subdomains discovered:"
+    if [[ ${#discovered_subdomains[@]} -eq 0 ]]; then
+        echo -e "   - \e[31mNo subdomains found\e[0m"
+    else
+        for subdomain in "${discovered_subdomains[@]}"; do
+            echo -e "   - \e[32m$subdomain\e[0m"
+            if [ "$USE_FINGERPRINT" = true ]; then
+            check_cdn "$subdomain"
+            fingerprint_subdomain "$subdomain"
+            fi
+        done
+    fi
+
+}
+
+function check_cdn() {
+  local subdomain=$1
+  local cdn_records=("cloudflare" "akamaiedge" "amazonaws" "cloudfront" "fastly" "stackpath" "stackpathcdn" "maxcdn" "wpengine")
+
+  local cname_record
+  cname_record=$(dig +short CNAME "$subdomain")
+
+  for record in "${cdn_records[@]}"; do
+    if [[ $cname_record == *"$record"* ]]; then
+      echo "[*] $subdomain is using $record CDN"
+      return
+    fi
+  done
+}
+
+
+function fingerprint_subdomain() {
+  local subdomain=$1
+  local response_headers
+  response_headers=$(curl -sI "$subdomain")
+
+  # web servers
+  if [[ $response_headers == *"Server: nginx"* ]]; then
+    echo "[*] $subdomain is using nginx web server"
+  elif [[ $response_headers == *"Server: Apache"* ]]; then
+    echo "[*] $subdomain is using Apache web server"
+  elif [[ $response_headers == *"Server: Microsoft-IIS"* ]]; then
+    echo "[*] $subdomain is using Microsoft IIS web server"
+  elif [[ $response_headers == *"Server: LiteSpeed"* ]]; then
+    echo "[*] $subdomain is using LiteSpeed web server"
+  fi
+    
+  # security
+  if [[ $response_headers == *"X-Content-Type-Options: nosniff"* ]]; then
+    echo "[*] $subdomain is possibly using a security framework"
+  fi
+    
+  # technologies
+  if [[ $response_headers == *"X-Powered-By: PHP"* ]]; then
+    echo "[*] $subdomain is using PHP"
+  elif [[ $response_headers == *"X-Powered-By: Express"* ]]; then
+    echo "[*] $subdomain is using Express.js"
+  elif [[ $response_headers == *"X-AspNet-Version:"* ]]; then
+    echo "[*] $subdomain is using ASP.NET"
+  elif [[ $response_headers == *"X-Powered-By: Plesk"* ]]; then
+    echo "[*] $subdomain is using Plesk"
+  elif [[ $response_headers == *"X-Drupal-Cache:"* ]]; then
+    echo "[*] $subdomain is using Drupal"
+  elif [[ $response_headers == *"X-Powered-By: Node.js"* ]]; then
+    echo "[*] $subdomain is using Node.js"
+  elif [[ $response_headers == *"X-Powered-By: Django"* ]]; then
+    echo "[*] $subdomain is using Django"
+  elif [[ $response_headers == *"X-Powered-By: Flask"* ]]; then
+    echo "[*] $subdomain is using Flask"
+  elif [[ $response_headers == *"X-Runtime:"* ]]; then
+    echo "[*] $subdomain is using Ruby on Rails"
+  fi
+
+  # cms and frameworks
+  local response_body
+  response_body=$(curl -s "$subdomain")
+
+  if [[ $response_body == *'/wp-includes/'* ]]; then
+    echo "[*] $subdomain is using WordPress"
+  elif [[ $response_body == *'/media/jui/js/'* ]]; then
+    echo "[*] $subdomain is using Joomla"
+  elif [[ $response_body == *'/index.php?option=com_'* ]]; then
+    echo "[*] $subdomain is using Joomla"
+  elif [[ $response_body == *'/skin/frontend/'* ]]; then
+    echo "[*] $subdomain is using Magento"
+  elif [[ $response_body == *'/sites/default/files/'* ]]; then
+    echo "[*] $subdomain is using Drupal"
+  elif [[ $response_body == *'/system/files/'* ]]; then
+    echo "[*] $subdomain is using Drupal"
+  elif [[ $response_body == *'/user/login?destination=node/'* ]]; then
+    echo "[*] $subdomain is using Drupal"
+  elif [[ $response_body == *'/themes/gentelella/'* ]]; then
+    echo "[*] $subdomain is using Gentelella Admin Template"
+  elif [[ $response_body == 'x-content-security-policy:' ]]; then
+    echo "[] $subdomain is using Content Security Policy (CSP)"
+  elif [[ $response_body == *'<script src="/bundles/'* ]]; then
+    echo "[] $subdomain is using Symfony"
+  elif [[ $response_body == *'/static/admin/css/'* ]]; then
+    echo "[] $subdomain is using Django"
+  elif [[ $response_body == *'/app_dev.php/'* ]]; then
+    echo "[] $subdomain is using Symfony"
+  elif [[ $response_body == *'/static/version'* ]]; then
+    echo "[] $subdomain is using Magento"
+  elif [[ $response_body == *'/themes/bootstrap/'* ]]; then
+    echo "[] $subdomain is using Bootstrap"
+  elif [[ $response_body == *'<html ng-app'* ]]; then
+    echo "[] $subdomain is using AngularJS"
+  elif [[ $response_body == *'<div ng-view'* ]]; then
+    echo "[] $subdomain is using AngularJS"
+  elif [[ $response_body == *'<link href="/static/css/'* ]]; then
+    echo "[] $subdomain is using Flask"
+  elif [[ $response_body == *'<link href="/staticfiles/css/'* ]]; then
+    echo "[] $subdomain is using Django"
+  elif [[ $response_body == *'<script src="/assets/js/react.production.min.js"'* ]]; then
+    echo "[] $subdomain is using React"
+  elif [[ $response_body == *'<script src="/assets/js/vue.min.js"'* ]]; then
+    echo "[] $subdomain is using Vue.js"
+  elif [[ $response_body == *'<script src="/assets/js/ember.min.js"'* ]]; then
+    echo "[] $subdomain is using Ember.js"
+  elif [[ $response_body == *'<script src="/assets/js/backbone-min.js"'* ]]; then
+    echo "[] $subdomain is using Backbone.js"
+
+  fi
+    
+    #api 
+    
+    if [[ $response_headers == *"content-type: application/json"* ]] || \
+     [[ $response_headers == *"content-type: application/xml"* ]] || \
+     [[ $response_body == *"\"apiVersion\":"* ]] || \
+     [[ $response_body == *"<apiVersion>"* ]]; then
+    echo "[*] $subdomain is likely an API endpoint"
+    fi
+  
+}
+
+
+
+check_dns_records() {
+    echo "[*] Checking DNS records for domain $DOMAIN"
+    vulns=()
+	if [[ "$VERBOSE" == "true" ]]; then echo "[DEBUG] Discovered subdomain: $sub"; fi
+
+    for rtype in "${DNS_RECORD_TYPES[@]}"; do
+        answers=$(dig +short "$DOMAIN" "$rtype" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')
+        if [[ -n "$answers" ]]; then
+            for rdata in $answers; do
+                if [[ "$rtype" == 'CNAME' && "$rdata" == 'aws.amazon.com' ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" =~ ^(A|AAAA)$ && "$rdata" =~ ^54\.231\. ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'MX' && "$rdata" == *".amazonaws.com" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'NS' && "$rdata" =~ ^ns- ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'PTR' && "$rdata" == *".amazonaws.com" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".github.io" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".herokuapp.com" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".azurewebsites.net" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".readme.io" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".storage.googleapis.com" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".web.app" ]]; then
+                    vulns+=("$rtype $rdata")
+                elif [[ "$rtype" == 'CNAME' && "$rdata" == *".firebaseapp.com" ]]; then
+                    vulns+=("$rtype $rdata")
+                fi
+            done
+        fi
+    done
+
+    if [[ ${#vulns[@]} -gt 0 ]]; then
+        echo "[!] Potential subdomain takeover vulnerability detected:"
+        for vuln in "${vulns[@]}"; do
+            echo "   - $vuln"
+        done
+    fi
+
+    return ${#vulns[@]}
+}
+
+
+check_http_responses() {
+    echo "[*] Checking HTTP responses for domain $DOMAIN"
+    vulns=()
+
+    for bucket_name in "${BUCKET_NAMES[@]}"; do
+        subdomain="$bucket_name.$DOMAIN"
+        url="http://$subdomain"
+        status_code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+        if [[ "${HTTP_STATUS_CODES[*]}" =~ $status_code ]]; then
+            vulns+=("$subdomain $status_code")
+        fi
+    done
+
+    if [[ ${#vulns[@]} -gt 0 ]]; then
+        echo "[!] Potential subdomain takeover vulnerability detected:"
+        for vuln in "${vulns[@]}"; do
+            echo "   - $vuln"
+        done
+    fi
+
+    return ${#vulns[@]}
+}
+
+check_dns_vulns() {
+    echo "[*] Checking DNS vulnerabilities for domain $DOMAIN"
+    vulns=()
+
+    # open ports
+    open_ports=$(nmap -p- --min-rate=1000 -T4 "$DOMAIN" | grep ^[0-9] | cut -d '/' -f 1 | tr '\n' ',')
+    if [ -n "$open_ports" ]; then
+        vulns+=("Open ports found: $open_ports")
+    fi
+
+    # DNS poisoning
+    dnstracer_output=$(dnstracer -q -r "$DOMAIN" | grep -E 'DNS:|Found the following nameservers|Result:|Stop reason:')
+    if echo "$dnstracer_output" | grep -q 'Stop reason: Query refused'; then
+        vulns+=("DNS poisoning detected (query refused)")
+    fi
+    if echo "$dnstracer_output" | grep -q 'Stop reason: Query timed out'; then
+        vulns+=("DNS poisoning detected (query timed out)")
+    fi
+
+    if [ "$(dig +short axfr "$DOMAIN" ns "@8.8.8.8")" != "" ]; then
+	  vulns+=("DNS zone transfer vulnerability detected")
+	fi
+
+	if [ "$(dig +short version.bind txt chaos "@8.8.8.8")" != "" ]; then
+	  vulns+=("DNS cache snooping vulnerability detected")
+	fi
+
+
+    # DNS rebinding 
+    if [ "$(dig +short random-string.$DOMAIN)" == "" ]; then
+        vulns+=("DNS rebinding vulnerability detected")
+    fi
+    
+    # DNSSEC
+    dnssec=$(dig +dnssec +short "$DOMAIN" DNSKEY | wc -l)
+    if [ "$dnssec" -eq 0 ]; then
+        vulns+=("DNSSEC is not enabled")
+    fi
+
+    # misconfigured DNS records
+    if [ "$(dig +short $DOMAIN SOA)" == "" ]; then
+        vulns+=("No SOA record found")
+    fi
+    if [ "$(dig +short $DOMAIN MX)" == "" ]; then
+        vulns+=("No MX record found")
+    fi
+    if [ "$(dig +short $DOMAIN TXT | grep -iE 'v=spf1.*-all')" != "" ]; then
+        vulns+=("SPF record is not strict")
+    fi
+    if [ "$(dig +short $DOMAIN TXT | grep -iE 'v=DKIM1.*t=s.*p=none')" != "" ]; then
+        vulns+=("DKIM record is not strict")
+    fi
+    if [ "$(dig +short $DOMAIN TXT | grep -iE 'v=DMARC1.*p=none')" != "" ]; then
+        vulns+=("DMARC record is not strict")
+    fi
+    if [ "$(dig +short $DOMAIN TXT | grep -iE 'v=TLSRPT1')" == "" ]; then
+        vulns+=("TLSRPT record is not found")
+    fi
+    if [ "$(dig +short $DOMAIN TXT | grep -iE 'v=OTR1')" == "" ]; then
+        vulns+=("OTR record is not found")
+    fi
+    
+
+    if [[ ${#vulns[@]} -gt 0 ]]; then
+        echo "[!] DNS vulnerabilities detected:"
+        for vuln in "${vulns[@]}"; do
+            echo "   - $vuln"
+        done
+    fi
+
+    return ${#vulns[@]}
+}
+
+
+
+
+
+if [[ "$MODE" == "discovery" ]]; then
+    discover_subdomains
+elif [[ "$MODE" == "takeover" ]]; then
+    discover_subdomains
+    check_dns_records
+    check_dns_vulns
+    dns_vulns=$?
+
+    check_http_responses
+    http_vulns=$?
+
+    if [[ $dns_vulns -eq 0 && $http_vulns -eq 0 ]]; then
+        echo "[+] No subdomain takeover vulnerabilities found for domain $DOMAIN"
+        exit 0
+    else
+        echo "[!] Subdomain takeover vulnerabilities detected. Please investigate further."
+        exit 1
+    fi
+
+    echo "[!] DNS vulnerabilities detected:"
+    for vuln in "${vulns[@]}"; do
+        echo "   - $vuln"
+    done
+
+    return ${#vulns[@]}
+    
+    dns_vuln_count=0
+    http_vuln_count=0
+    for sub in "${discovered_subdomains[@]}"; do
+        if check_dns_records; then
+            dns_vuln_count=$((dns_vuln_count + 1))
+        fi
+        if check_http_responses; then
+            http_vuln_count=$((http_vuln_count + 1))
+        fi
+    done
+
+    echo ""
+    echo "[*] Summary:"
+    echo "   - Total subdomains discovered: ${#discovered_subdomains[@]}"
+    echo "   - Subdomains with DNS record vulnerabilities: $dns_vuln_count"
+    echo "   - Subdomains with HTTP response vulnerabilities: $http_vuln_count"
+    echo ""
+
+    check_dns_vulns
+    exit 0
+else
+echo "Error: invalid mode specified: $MODE" >&2
+usage
+fi
+
+if [[ -n "$OUTPUT" ]]; then
+  echo "Writing output to $OUTPUT"
+  printf "%s\n" "${discovered_subdomains[@]}" > "$OUTPUT"
+fi
