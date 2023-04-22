@@ -1,5 +1,5 @@
 # <p align="center">Flora<p/>
-Flora is a lightweight command-line tool for discovering subdomains and takeover vulnerabilities.
+
 
 Flora is a command-line tool designed to enumerate subdomains for a given domain and identify potential subdomain takeovers. The tool supports multiple modes of operation, including discovery and takeover, and offers several options for customizing the scanning process.
 <br>
