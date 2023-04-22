@@ -59,7 +59,7 @@ function usage() {
   exit 1
 }
 
-while getopts ":d:m:w:k:t:s:o:fX:aCv" opt; do
+while getopts ":d:m:w:k:t:s:o:fX:av" opt; do
   case ${opt} in
     d )
       DOMAIN="$OPTARG"
