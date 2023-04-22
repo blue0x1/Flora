@@ -21,6 +21,14 @@ Flora is a command-line tool designed to enumerate subdomains for a given domain
 - Fingerprinting to identify subdomains.
 - Support for Assetfinder for subdomain enumeration.<br>
 
+## requirements
+
+- curl
+- jq
+- nmap
+- assetfinder
+- dnstracer
+
 ## Installation
 
 ```bash
