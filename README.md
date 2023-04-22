@@ -42,7 +42,7 @@ run it against target
 (optional: run it from anywhere) 
 
 ```
-cp flora /bin/
+sudo cp flora /bin/
 ```
 
 ## Usage:
